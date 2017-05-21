@@ -79,6 +79,7 @@ def migrate_groups(nova_cursor, neutron_cursor):
             continue
         group_uuid = generate_uuid()
         group['uuid'] = group_uuid
+        group['description'] = group['description'].replace("'", "\\'")
         mappings[group['id']] = {'uuid': group_uuid,
                                  'project_id': group['project_id']}
         execute(neutron_cursor, neutron_group_sql % group)

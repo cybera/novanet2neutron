@@ -12,25 +12,43 @@ CONF = ConfigParser.ConfigParser()
 
 
 def add_port(neutronc, instance, network_id, subnet_id,
-             mac_address, ip_address):
-    body_value = {
-        "port": {
-            "tenant_id": instance.tenant_id,
-            "mac_address": mac_address,
-            "fixed_ips": [
-                {
-                    "subnet_id": subnet_id,
-                    "ip_address": ip_address,
-                }],
-            "network_id": network_id,
+             mac_address, ip_address, subnet_v6=None, ip_v6=None):
+    if subnet_v6:
+        body_value = {
+            "port": {
+                "tenant_id": instance.tenant_id,
+                "mac_address": mac_address,
+                "fixed_ips": [
+                    {
+                        "subnet_id": subnet_id,
+                        "ip_address": ip_address,
+                    },
+                    {
+                        "subnet_id": subnet_v6,
+                    }],
+                "network_id": network_id,
+            }
         }
-    }
+    else:
+        body_value = {
+            "port": {
+                "tenant_id": instance.tenant_id,
+                "mac_address": mac_address,
+                "fixed_ips": [
+                    {
+                        "subnet_id": subnet_id,
+                        "ip_address": ip_address,
+                    }],
+                "network_id": network_id,
+            }
+        }
     ports = neutronc.list_ports(mac_address=mac_address, network_id=network_id)
     if ports['ports']:
         port = ports['ports'][0]
         print "Not creating port for %s already exists" % mac_address
     else:
         try:
+            print body_value
             port = neutronc.create_port(body=body_value)['port']
         except Exception, e:
             print e
@@ -73,12 +91,16 @@ def add_ports(neutronc, cursor, mappings, instance, target_zone):
         neutron_network = network_info['network_id']
         subnet_v4 = network_info['subnet_v4_id']
 
-        add_port(neutronc, instance, neutron_network,
-                 subnet_v4, mac_address, ip_v4)
-        if ip_v6 != "None":
+        #add_port(neutronc, instance, neutron_network,
+        #         subnet_v4, mac_address, ip_v4)
+        if 'subnet_v6_id' in network_info:
             subnet_v6 = network_info['subnet_v6_id']
             add_port(neutronc, instance, neutron_network,
-                     subnet_v6, mac_address, ip_v6)
+                     subnet_v4, mac_address, ip_v4, subnet_v6, ip_v6)
+        else:
+            add_port(neutronc, instance, neutron_network,
+                     subnet_v4, mac_address, ip_v4)
+
     #if suspend:
     #    instance.suspend()
 
@@ -92,36 +114,39 @@ def create_networks(neutronc):
         for option in CONF.options(section):
             mappings[section][option] = CONF.get(section, option)
         zone = CONF.get(section, 'zone')
-        network_name = CONF.get(section, 'name')
-        if zone == network_name:
-            name = zone
-        else:
-            name = "%s-%s" % (zone, network_name)
+        name = CONF.get(section, 'name')
         physnet = CONF.get(section, 'physnet')
         network = common.get_network(neutronc, name)
         if not network:
             network = common.create_network(neutronc, name, physnet)
         mappings[section]['network_id'] = network
         subnet_v4 = common.get_subnet(neutronc, network, 4)
-        try:
-            gateway_v4 = CONF.get(section, 'gateway_v4')
-        except:
-            gateway_v4 = None
+        gateway_v4 = CONF.get(section, 'gateway_v4')
+        dns_servers = CONF.get(section, 'dns_servers').split(',')
+        dhcp_start = CONF.get(section, 'dhcp_start')
+        dhcp_end = CONF.get(section, 'dhcp_end')
         if not subnet_v4:
             subnet_v4 = common.create_subnet(
                 neutronc, network, 4,
                 CONF.get(section, 'cidr_v4'),
-                CONF.get(section, 'dns_servers').split(','),
-                gateway_v4,
-                CONF.get(section, 'dhcp_start'),
-                CONF.get(section, 'dhcp_end'))
+                dns_servers=dns_servers,
+                gateway=gateway_v4,
+                dhcp_start=dhcp_start,
+                dhcp_end=dhcp_end,
+                name="default_v4")
         mappings[section]['subnet_v4_id'] = subnet_v4
         if 'cidr_v6' in CONF.options(section):
-            subnet_v6 = common.create_subnet(
-                neutronc, network, 6,
-                CONF.get(section, 'cidr_v6'),
-                CONF.get(section, 'dns_servers').split(','),
-                CONF.get(section, 'gateway_v6'))
+            subnet_v6 = common.get_subnet(neutronc, network, 6)
+            if not subnet_v6:
+                ipv6_address_mode = CONF.get(section, 'ipv6_address_mode')
+                gateway_v6 = CONF.get(section, 'gateway_v6')
+                subnet_v6 = common.create_subnet(
+                    neutronc, network, 6,
+                    CONF.get(section, 'cidr_v6'),
+                    dns_servers=None,
+                    gateway=gateway_v6,
+                    ipv6_address_mode=ipv6_address_mode,
+                    name="default_v6")
             mappings[section]['subnet_v6_id'] = subnet_v6
 
     return mappings
@@ -132,6 +157,7 @@ def check_hypervisors(novac):
     for h in novac.hypervisors.list():
         if h.hypervisor_type != 'fake':
             print 'Hypervisor %s is not fake' % h.hypervisor_hostname
+            print 'Hypervisor %s is %s' % (h.hypervisor_hostname, h.hypervisor_type)
             sys.exit(1)
 
 

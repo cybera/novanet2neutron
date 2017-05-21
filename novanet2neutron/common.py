@@ -66,23 +66,25 @@ def create_network(neutronc, network_name, physname='public'):
     return network_id
 
 
-def create_subnet(neutronc, network_id, protocol, cidr, dns_servers,
-                  gateway, dhcp_start=None, dhcp_end=None,
-                  ipv6_address_mode=None, ipv6_ra_mode=None):
+def create_subnet(neutronc, network_id, protocol, cidr, dns_servers=None,
+                  gateway=None, dhcp_start=None, dhcp_end=None,
+                  ipv6_address_mode=None, name=None):
 
     body_create_subnet = {'subnets': [{'cidr': cidr,
                                        'ip_version': protocol,
-                                       'network_id': network_id,
-                                       'dns_nameservers': dns_servers,
-                                       'gateway_ip': gateway}]}
+                                       'network_id': network_id}]}
     if dhcp_start and dhcp_end:
         body_create_subnet['subnets'][0]['allocation_pools'] = [
             {'start': dhcp_start, 'end': dhcp_end}]
 
+    if dns_servers:
+        body_create_subnet['subnets'][0]['dns_nameservers'] = dns_servers
+    if gateway:
+        body_create_subnet['subnets'][0]['gateway_ip'] = gateway
     if ipv6_address_mode:
         body_create_subnet['subnets'][0]['ipv6_address_mode'] = ipv6_address_mode
-    if ipv6_ra_mode:
-        body_create_subnet['subnets'][0]['ipv6_ra_mode'] = ipv6_ra_mode
+    if name:
+        body_create_subnet['subnets'][0]['name'] = name
     subnet = neutronc.create_subnet(body=body_create_subnet)
 
     sn_dict = subnet['subnets'][0]

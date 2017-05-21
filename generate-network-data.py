@@ -17,10 +17,12 @@ CREATE TABLE `network_migration_info` (
   `availability_zone` varchar(255) DEFAULT NULL,
   `ip_v4` varchar(39) DEFAULT NULL,
   `ip_v6` varchar(39) DEFAULT NULL,
+  `floating_ip` varchar(39) DEFAULT NULL,
   `host` varchar(255) DEFAULT NULL,
   `mac_address` varchar(255) DEFAULT NULL,
   `status` varchar(255) DEFAULT NULL,
   `task_state` varchar(255) DEFAULT NULL,
+  `tenant_id` varchar(255) DEFAULT NULL,
   PRIMARY KEY (`id`)
  ) ENGINE=InnoDB AUTO_INCREMENT=4 DEFAULT CHARSET=utf8;
 """
@@ -37,30 +39,36 @@ def add_instance(cursor, instance):
         'availability_zone': zone,
         'ip_v6': None,
         'ip_v4': None,
+        'floating_ip': None,
         'status': instance.status,
         'task_state': task_state,
+        'tenant_id': instance.tenant_id,
     }
 
     for network_name, addresses in instance.addresses.items():
         if not addresses:
             continue
-        data['network_name'] = network_name
+        data['network_name'] = "default"
 
         for a in addresses:
             data['mac_address'] = a.get('OS-EXT-IPS-MAC:mac_addr')
-            if a['version'] == 4:
-                ip_v4 = a.get('addr')
-                data['ip_v4'] = ip_v4
-            elif a['version'] == 6:
-                ip_v6 = a.get('addr')
-                data['ip_v6'] = ip_v6
+            if a['OS-EXT-IPS:type'] == "floating":
+                data['floating_ip'] = a.get('addr')
+            else:
+                if a['version'] == 4:
+                    ip_v4 = a.get('addr')
+                    data['ip_v4'] = ip_v4
+                elif a['version'] == 6:
+                    ip_v6 = a.get('addr')
+                    data['ip_v6'] = ip_v6
 
         sql = """INSERT INTO network_migration_info set
         uuid='%(uuid)s', network_name='%(network_name)s',
         availability_zone='%(availability_zone)s',
         ip_v4='%(ip_v4)s', ip_v6='%(ip_v6)s', host='%(host)s',
         mac_address='%(mac_address)s', status='%(status)s',
-        task_state='%(task_state)s'""" % data
+        task_state='%(task_state)s', floating_ip='%(floating_ip)s',
+        tenant_id='%(tenant_id)s'""" % data
         cursor.execute(sql)
         cursor.connection.commit()
 
