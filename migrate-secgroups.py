@@ -80,7 +80,7 @@ def create_default_rules(cursor, group):
             execute(cursor, neutron_attr_sql % attr)
             rule['standard_attr_id'] = cursor.lastrowid
             execute(cursor, neutron_rule_sql % rule)
-    cursor.connection.commit()
+    #cursor.connection.commit()
 
 
 def migrate_groups(nova_cursor, neutron_cursor):
@@ -104,7 +104,7 @@ def migrate_groups(nova_cursor, neutron_cursor):
         group['standard_attr_id'] = neutron_cursor.lastrowid
         print group
         execute(neutron_cursor, neutron_group_sql % group)
-        neutron_cursor.connection.commit()
+        #neutron_cursor.connection.commit()
         create_default_rules(neutron_cursor, group)
     return mappings
 
@@ -155,7 +155,7 @@ def migrate_bindings(nova_cursor, neutron_cursor, mappings):
         for port in ports:
             binding['port_id'] = port
             execute(neutron_cursor, neutron_binding_sql % binding)
-        neutron_cursor.connection.commit()
+        #neutron_cursor.connection.commit()
 
 
 def delete_neutron_existing(cursor):
@@ -163,7 +163,7 @@ def delete_neutron_existing(cursor):
     cursor.execute("DELETE from securitygrouprules")
     cursor.execute("DELETE from securitygroups")
     cursor.execute("DELETE from default_security_group")
-    cursor.connection.commit()
+    #cursor.connection.commit()
 
 
 def collect_args():
@@ -193,6 +193,7 @@ def main():
     neutron_cursor = MySQLdb.cursors.DictCursor(neutron_conn)
     delete_neutron_existing(neutron_cursor)
     mappings = migrate_groups(nova_cursor, neutron_cursor)
+    neutron_conn.commit()
     migrate_rules(nova_cursor, neutron_cursor, mappings)
     neutron_conn.commit()
     migrate_bindings(nova_cursor, neutron_cursor, mappings)

@@ -80,6 +80,13 @@ def migrate_interfaces(noop, migrate_manager, neutronc,
         old_bridge = manager.get_old_bridge()
         new_bridge = manager.get_new_bridge()
         raw_device = network['device']
+        # For migrating VLANs - we need raw_device to be the vlan interface
+        raw_device += "."
+        raw_device += str(network['provider:segmentation_id'])
+        old_raw_device = "vlan"
+        old_raw_device += str(network['provider:segmentation_id'])
+
+        print raw_device
 
         # remove interfaces from bridge
         interfaces = utils.get_interfaces_on_bridge(old_bridge)
@@ -93,16 +100,22 @@ def migrate_interfaces(noop, migrate_manager, neutronc,
             # rename bridge
             utils.rename_net_dev(noop, old_bridge, new_bridge)
 
+        # Rename interface from vlan123 to DEVICE.123
+        utils.rename_net_dev(noop, old_raw_device, raw_device)
+
         interfaces = utils.get_interfaces_on_bridge(new_bridge)
         if raw_device not in interfaces:
             # Add raw device back onto bridge
             utils.add_dev_to_bridge(noop, new_bridge, raw_device)
 
         for instance in instances:
-            print "Migrating %s" % instance.id
-            mac_address = common.get_mac_db(cursor, instance, network['nova_name'])
-            if not mac_address:
+            mac_address = ""
+            mac_addressq = common.get_db_data(cursor, instance, network['nova_name'])
+            if not mac_addressq:
                 continue
+            else:
+                mac_address = mac_addressq['mac_address']
+                print "Migrating %s" % instance.id
             if instance.status in ['SHUTOFF', 'SUSPENDED']:
                 old_tap = None
             else:
@@ -141,8 +154,8 @@ def collect_args():
     return parser.parse_args()
 
 
-def get_network(neutronc, net_id):
-    network = neutronc.list_networks(id=net_id)['networks'][0]
+def get_network(neutronc, net_name):
+    network = neutronc.list_networks(name=net_name)['networks'][0]
     subnets = neutronc.list_subnets(network_id=network['id'])['subnets']
     for subnet in subnets:
         network['subnet_v%s' % subnet['ip_version']] = subnet['id']
@@ -170,26 +183,52 @@ def main():
     username = CONF.get('creds', 'username')
     password = CONF.get('creds', 'password')
     tenant = CONF.get('creds', 'tenant_name')
+    region = CONF.get('creds', 'region')
 
     host = socket.gethostname()
     novac = common.get_nova_client(username=username,
                                    password=password,
                                    tenant=tenant,
+                                   region=region,
                                    url=url)
 
     neutronc = common.get_neutron_client(username=username,
                                          password=password,
                                          tenant=tenant,
+                                         region=region,
                                          url=url)
 
     networks = []
+    device = 'bond0'
+    # Gather neutron network id, nova network name, device/physnet, and nova bridge
+    # Could generate a list? Or do we need to generate this data in generate-network-data.py?
+    # Example in prod:
+    # device = bond0
+    # bridge = brXXX
+
     for section in CONF.sections():
-        if section.startswith('network_'):
-            network_id = CONF.get(section, 'neutron_net_id')
-            network = get_network(neutronc, network_id)
-            for option in ('device', 'bridge', 'nova_name'):
-                network[option] = CONF.get(section, option)
-            networks.append(network)
+	if section.startswith('network_default'):
+	    device = CONF.get(section, 'device')
+
+    # O hai - why aren't you defined?
+    cursor.execute("SELECT * from networks WHERE project_id is not null order by id")
+    nova_networks = cursor.fetchall()
+    for novanet in nova_networks:
+	network = get_network(neutronc, novanet['label'])
+        print network
+	network['device'] = device
+	network['bridge'] = novanet['bridge']
+	network['nova_name'] = novanet['label']
+	network['neutron_net_id'] = network['id']
+	networks.append(network)
+
+    #for section in CONF.sections():
+    #    if section.startswith('network_'):
+    #        network_id = CONF.get(section, 'neutron_net_id')
+    #        network = get_network(neutronc, network_id)
+    #        for option in ('device', 'bridge', 'nova_name'):
+    #            network[option] = CONF.get(section, option)
+    #        networks.append(network)
 
     instances = common.all_servers(novac, host=host)
     if direction == 'neutron':

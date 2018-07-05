@@ -5,6 +5,7 @@ import ConfigParser
 import MySQLdb
 import sys
 import time
+from netaddr import *
 
 from novanet2neutron import common
 
@@ -87,7 +88,8 @@ def add_ports(neutronc, cursor, mappings, instance, target_zone):
         ip_v4 = network['ip_v4']
         ip_v6 = network['ip_v6']
         mac_address = network['mac_address']
-        network_info = mappings['network_%s:%s' % (zone, network_name)]
+        #network_info = mappings['network_%s:%s' % (zone, network_name)]
+        network_info = mappings[network_name]
         neutron_network = network_info['network_id']
         subnet_v4 = network_info['subnet_v4_id']
 
@@ -105,49 +107,96 @@ def add_ports(neutronc, cursor, mappings, instance, target_zone):
     #    instance.suspend()
 
 
-def create_networks(neutronc):
+def create_networks(neutronc, cursor):
     mappings = {}
+
+    #Get Network list - have to use MySQL and not the Nova API
+    #as nova needs to be switched to neutron for the add_ports
+    #section to work. We also don't want to migrate non assigned
+    #networks
+    cursor.execute("SELECT * from networks WHERE project_id is not null order by id")
+    networks = cursor.fetchall()
+
+    # Set some defaults for things that are not defined in nova-network
+    # This assumes all networks to migrate have the same zone, and ipv6_address_mode
+    zone = 'default'
+    ipv6_address_mode = 'slaac'
     for section in CONF.sections():
+        # Recommended name for section: network_defaults
         if not section.startswith('network_'):
             continue
         mappings[section] = {}
         for option in CONF.options(section):
             mappings[section][option] = CONF.get(section, option)
         zone = CONF.get(section, 'zone')
-        name = CONF.get(section, 'name')
-        physnet = CONF.get(section, 'physnet')
+        if 'cidr_v6' in CONF.options(section):
+            ipv6_address_mode = CONF.get(section, 'ipv6_address_mode')
+
+    # Iterate through networks and create if not already created
+    for network_to_migrate in networks:
+        name = network_to_migrate['label']
+        vlan_id = network_to_migrate['vlan']
+        project_id = network_to_migrate['project_id']
+
+        # If project is unassigned - who do we assign it to?
+        #if project_id == None:
+
+        #physnet = network_to_migrate.bridge_interface
+        #Always eth2 which is mapped to the name physnet
+        physnet = 'physnet'
+
+        mappings[name] = {}
+
+        print name
+
         network = common.get_network(neutronc, name)
         if not network:
-            network = common.create_network(neutronc, name, physnet)
-        mappings[section]['network_id'] = network
+            network = common.create_network(neutronc, name, physnet, 'vlan', vlan_id, project_id)
+        mappings[name]['network_id'] = network
+
+        print network_to_migrate['cidr']
+
+        gateway_v4 = network_to_migrate['gateway']
+        dns_servers = []
+        # If the DNS server is set to null - use Cloudflare
+        if not network_to_migrate['dns1']:
+            network_to_migrate['dns1'] = '1.1.1.1'
+        dns_servers.append(network_to_migrate['dns1'])
+        dhcp_start = network_to_migrate['dhcp_start']
+
+        # nova-network doesn't have a dhcp_end by default instead it uses the cidr
+        # Calculate last ip using the cidr
+        ip = IPNetwork(network_to_migrate['cidr'])
+        dhcp_end = ip[-2]
+
         subnet_v4 = common.get_subnet(neutronc, network, 4)
-        gateway_v4 = CONF.get(section, 'gateway_v4')
-        dns_servers = CONF.get(section, 'dns_servers').split(',')
-        dhcp_start = CONF.get(section, 'dhcp_start')
-        dhcp_end = CONF.get(section, 'dhcp_end')
         if not subnet_v4:
+            # Add subnetpool here as well
             subnet_v4 = common.create_subnet(
                 neutronc, network, 4,
-                CONF.get(section, 'cidr_v4'),
+                cidr=network_to_migrate['cidr'],
                 dns_servers=dns_servers,
                 gateway=gateway_v4,
                 dhcp_start=dhcp_start,
                 dhcp_end=dhcp_end,
-                name="default_v4")
-        mappings[section]['subnet_v4_id'] = subnet_v4
-        if 'cidr_v6' in CONF.options(section):
+                project=project_id,
+                name="private_v4")
+
+        mappings[name]['subnet_v4_id'] = subnet_v4
+
+        if network_to_migrate['cidr_v6'] != None:
             subnet_v6 = common.get_subnet(neutronc, network, 6)
             if not subnet_v6:
-                ipv6_address_mode = CONF.get(section, 'ipv6_address_mode')
-                gateway_v6 = CONF.get(section, 'gateway_v6')
+                gateway_v6 = network_to_migrate['gateway_v6']
                 subnet_v6 = common.create_subnet(
                     neutronc, network, 6,
-                    CONF.get(section, 'cidr_v6'),
+                    network_to_migrate['cidr_v6'],
                     dns_servers=None,
                     gateway=gateway_v6,
                     ipv6_address_mode=ipv6_address_mode,
-                    name="default_v6")
-            mappings[section]['subnet_v6_id'] = subnet_v6
+                    project=project_id,
+                    name="private_v6")
+            mappings[name]['subnet_v6_id'] = subnet_v6
 
     return mappings
 
@@ -186,7 +235,7 @@ def main():
     check_hypervisors(novac)
     neutronc = common.get_neutron_client()
     print "creating networks"
-    mappings = create_networks(neutronc)
+    mappings = create_networks(neutronc, cursor)
     print "getting instances"
     instances = common.all_servers(novac)
     print "adding ports"
