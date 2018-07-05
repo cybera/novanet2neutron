@@ -16,6 +16,7 @@ name=neutron
 user=neutron
 password=secret
 
+# After 45c7b75, only the zone and ipv6_address_mode are required for [network_nova:default]
 [network_nova:public]
 zone=nova
 name=public

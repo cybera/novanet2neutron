@@ -19,6 +19,8 @@ tenant_name=admin
 auth_url=http://keystone.example.com:5000/v2.0/
 
 # Blocks must start with network_
+# If using the multiple network support in 45c7b75, the only value used is
+# device. The rest are scrapped from the nova database
 [network_public]
 neutron_net_id = XXX-XXX-XXX-XXX
 nova_name = public
