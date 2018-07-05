@@ -11,11 +11,14 @@ CONF = ConfigParser.ConfigParser()
 
 
 neutron_group_sql = """
-INSERT into securitygroups set tenant_id='%(project_id)s', name='%(name)s', id='%(uuid)s', description='%(description)s'"""
+INSERT into securitygroups set tenant_id='%(project_id)s', name='%(name)s', id='%(uuid)s', standard_attr_id='%(standard_attr_id)s'"""
+
+neutron_attr_sql = """
+INSERT into standardattributes set resource_type='%(resource_type)s', created_at=NOW(), updated_at=NOW(), description='%(description)s'"""
 
 neutron_rule_sql = """
 INSERT into securitygrouprules set tenant_id='%(project_id)s', security_group_id='%(security_group_id)s', id='%(uuid)s', remote_group_id='%(group_id)s',
-direction='%(direction)s', ethertype='%(ethertype)s', protocol='%(protocol)s', port_range_min='%(from_port)s', port_range_max='%(to_port)s', remote_ip_prefix='%(cidr)s'
+direction='%(direction)s', ethertype='%(ethertype)s', protocol='%(protocol)s', port_range_min='%(from_port)s', port_range_max='%(to_port)s', remote_ip_prefix='%(cidr)s', standard_attr_id='%(standard_attr_id)s'
 """
 
 neutron_binding_sql = """
@@ -53,9 +56,17 @@ def create_default_rules(cursor, group):
         'to_port': None,
         'cidr': None,
     }
+
+    # Standard attribute fix
+    attr = {}
+    attr['description'] = ''
+    attr['resource_type'] = 'securitygrouprules'
+
     for ethertype in ['IPv4', 'IPv6']:
         rule['ethertype'] = ethertype
         rule['uuid'] = generate_uuid()
+        execute(cursor, neutron_attr_sql % attr)
+        rule['standard_attr_id'] = cursor.lastrowid
         execute(cursor, neutron_rule_sql % rule)
 
     if group['name'] == 'default':
@@ -66,6 +77,8 @@ def create_default_rules(cursor, group):
         for ethertype in ['IPv4', 'IPv6']:
             rule['uuid'] = generate_uuid()
             rule['ethertype'] = ethertype
+            execute(cursor, neutron_attr_sql % attr)
+            rule['standard_attr_id'] = cursor.lastrowid
             execute(cursor, neutron_rule_sql % rule)
     cursor.connection.commit()
 
@@ -82,6 +95,14 @@ def migrate_groups(nova_cursor, neutron_cursor):
         group['description'] = group['description'].replace("'", "\\'")
         mappings[group['id']] = {'uuid': group_uuid,
                                  'project_id': group['project_id']}
+        # Description is now in a different table
+        attr = {}
+        attr['description'] = group['description'].replace("'", "\\'")
+        attr['resource_type'] = 'securitygroups'
+        group.pop('description', None)
+        execute(neutron_cursor, neutron_attr_sql % attr)
+        group['standard_attr_id'] = neutron_cursor.lastrowid
+        print group
         execute(neutron_cursor, neutron_group_sql % group)
         neutron_cursor.connection.commit()
         create_default_rules(neutron_cursor, group)
@@ -89,6 +110,10 @@ def migrate_groups(nova_cursor, neutron_cursor):
 
 
 def migrate_rules(nova_cursor, neutron_cursor, mappings):
+    # Standard attribute fix
+    attr = {}
+    attr['description'] = ''
+    attr['resource_type'] = 'securitygrouprules'
     for id, group_data in mappings.items():
         nova_cursor.execute("SELECT * from security_group_rules where deleted = 0 and parent_group_id = %s" % id)
         rules = nova_cursor.fetchall()
@@ -107,6 +132,8 @@ def migrate_rules(nova_cursor, neutron_cursor, mappings):
                 rule['to_port'] = 'None'
             if rule['from_port'] == -1:
                 rule['from_port'] = 'None'
+            execute(neutron_cursor, neutron_attr_sql % attr)
+            rule['standard_attr_id'] = neutron_cursor.lastrowid
             execute(neutron_cursor, neutron_rule_sql % rule)
 
 
